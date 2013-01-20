@@ -1,5 +1,9 @@
 package net.ladstatt.apps
 
+import java.io.File
+import java.io.PrintWriter
+
+import scala.collection.JavaConversions.asScalaBuffer
 import scala.collection.JavaConversions.seqAsJavaList
 import scala.math.Pi
 import scala.math.cos
@@ -11,11 +15,15 @@ import javafx.animation.KeyFrame
 import javafx.animation.Timeline
 import javafx.application.Application
 import javafx.event.ActionEvent
+import javafx.event.Event
 import javafx.event.EventHandler
 import javafx.scene.Group
 import javafx.scene.Scene
 import javafx.scene.effect.Glow
+import javafx.scene.input.ClipboardContent
+import javafx.scene.input.DragEvent
 import javafx.scene.input.MouseEvent
+import javafx.scene.input.TransferMode
 import javafx.scene.paint.Color
 import javafx.scene.paint.CycleMethod
 import javafx.scene.paint.LinearGradient
@@ -52,9 +60,61 @@ class PlantSomeTrees extends javafx.application.Application {
   val growingSpeed = 96
   val branchSlices = 10
 
+  def mkEventHandler[E <: Event](f: E => Unit) = new EventHandler[E] { def handle(e: E) = f(e) }
+
+  def write2File(file: File, s: String) = {
+    val out = new PrintWriter(file, "UTF-8")
+    try { out.print(s) } finally { out.close }
+  }
+
+  def mkSvg(source: Group): String = {
+    val treeAsSvg = (for (s <- source.getChildren()) yield s match {
+      case line: Line => {
+        val rgb = line.getStroke match {
+          case c: Color => "rgb(%s,%s,%s)".format((c.getRed() * 255).toInt, (c.getGreen * 255).toInt, (c.getBlue * 255).toInt)
+          case _ => sys.error("unsupported")
+        }
+
+        """ <line x1="%s" y1="%s" x2="%s" y2="%s" style="stroke:%s;stroke-width:%s" />"""
+          .format(line.getStartX.toInt, line.getStartY.toInt, line.getEndX().toInt, line.getEndY.toInt, rgb, line.getStrokeWidth.toInt)
+      }
+      case _ => sys.error("unsupported")
+    }).toList.mkString(System.getProperty("line.separator"))
+
+    """<!DOCTYPE html>
+<html>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1">
+%s
+</svg>
+
+</body>
+</html>
+""".format(treeAsSvg)
+  }
+
+  def initDragNDrop(tree: Group) = {
+    tree.setOnDragDetected(mkEventHandler((event: MouseEvent) => {
+      val db = tree.startDragAndDrop(TransferMode.ANY: _*)
+      val content = new ClipboardContent()
+      val tmpFile =  File.createTempFile("Tree", ".html")
+      write2File(tmpFile, mkSvg(tree))
+      content.putHtml(mkSvg(tree))
+      content.putFiles(Vector(tmpFile))
+      db.setContent(content)
+      event.consume()
+    }))
+
+    tree.setOnDragDone(mkEventHandler((event: DragEvent) => {
+      event.consume()
+    }))
+  }
+
   override def start(stage: Stage): Unit = {
-    stage.setTitle("A growing forrest")
-    val root = new Group()
+    stage.setTitle("A draggable forrest")
+
+    val drawingArea = new Group()
     val background = {
       val b = new Rectangle(0, 0, canvasWidth, canvasHeight)
       val stops = List(new Stop(0, Color.BLACK), new Stop(1, Color.WHITESMOKE))
@@ -62,14 +122,17 @@ class PlantSomeTrees extends javafx.application.Application {
       b.setFill(g)
       b
     }
-    root.getChildren.add(background)
+    drawingArea.getChildren.add(background)
 
-    root.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler[MouseEvent] {
+    drawingArea.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler[MouseEvent] {
       def handle(event: MouseEvent) {
         val broot = Branch(event.getX, event.getY, minTreeSize + (maxTreeSize - minTreeSize) * Random.nextDouble,
           initialDirection, treeColor, trunkWidth, treeDepth)
         var lines2Paint = traverse(mkRandomTree(broot)).toList
         val tree = new Group()
+
+        initDragNDrop(tree)
+        
         tree.addEventHandler(MouseEvent.MOUSE_ENTERED, new EventHandler[MouseEvent] {
           def handle(event: MouseEvent) {
             tree.setEffect(new Glow(1.0))
@@ -81,7 +144,7 @@ class PlantSomeTrees extends javafx.application.Application {
           }
         })
 
-        root.getChildren.add(tree)
+        drawingArea.getChildren.add(tree)
         val growTimeline = new Timeline
         growTimeline.setRate(growingSpeed)
         growTimeline.setCycleCount(Animation.INDEFINITE)
@@ -103,7 +166,7 @@ class PlantSomeTrees extends javafx.application.Application {
       }
     })
 
-    stage.setScene(new Scene(root, canvasWidth, canvasHeight))
+    stage.setScene(new Scene(drawingArea, canvasWidth, canvasHeight))
     stage.show()
   }
 
@@ -112,7 +175,7 @@ class PlantSomeTrees extends javafx.application.Application {
     def randInt = (Random.nextFloat * 255).toInt
     Color.rgb(randInt, randInt, randInt)
   }
-  
+
   sealed trait ATree
   case class Branch(x: Double, y: Double, length: Double, degree: Double, color: Color, width: Int, ord: Int) extends ATree
   case class SubTree(center: ATree, left: ATree, right: ATree) extends ATree
