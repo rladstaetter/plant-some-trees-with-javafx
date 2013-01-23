@@ -112,7 +112,7 @@ class PlantSomeTrees extends javafx.application.Application {
   }
 
   override def start(stage: Stage): Unit = {
-    stage.setTitle("A draggable forrest")
+    stage.setTitle("A draggable forest")
 
     val drawingArea = new Group()
     val background = {
