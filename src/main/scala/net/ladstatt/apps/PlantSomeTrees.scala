@@ -51,6 +51,10 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
   val canvasHeight = 600
   val treeDepth = 5
   val trunkWidth = 5
+
+  val curDetail = 2
+  val displace = 10
+
   val (minTreeSize, maxTreeSize) = (50, 150)
   def treeColor = mkRandColor
   val (minDegree, maxDegree) = (0, Pi / 4)
@@ -109,7 +113,7 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
   }
 
   override def start(stage: Stage): Unit = {
-    stage.setTitle("A draggable forest")
+    stage.setTitle("A forest with midpoint replacement")
 
     val drawingArea = new Group()
     val background = {
@@ -188,20 +192,17 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
             case _ => {
               val dir = (start - dest).onedir
               val length = (start - dest).length
-              //              val l0 = length * (1 - Random.nextDouble * 0.3)
-              //              val l1 = length * (1 - Random.nextDouble * 0.5)
-              //              val l2 = length * (1 - Random.nextDouble * 0.5)
 
-              val l1 = length * 0.7
-              val l2 = length * 0.7
+              val l1 = length * (1 - Random.nextDouble * 0.7)
+              val l2 = length * (1 - Random.nextDouble * 0.7)
 
               // startpoint of left and right branch
               val midRoot = start + dir * length
 
               mkRandTree(SubTree(
                 Branch(start, start + (dir * length), color, width, ord - 1), // trunk
-                Branch(midRoot, midRoot + (dir.spin(Pi / 4) * l1), color.darker, width - 1, ord - 1), // leftbranch
-                Branch(midRoot, midRoot + (dir.spin(-Pi / 4) * l2), color.darker, width - 1, ord - 1))) // rightbranch
+                Branch(midRoot, midRoot + (dir.spin(mkRandDegree) * l1), color.darker, width - 1, ord - 1), // leftbranch
+                Branch(midRoot, midRoot + (dir.spin(-mkRandDegree) * l2), color.darker, width - 1, ord - 1))) // rightbranch
             }
           }
         }
@@ -215,7 +216,10 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
   def traverse(tree: ATree): List[Shape] = {
     tree match {
       case Branch(start, dest, c, width, ord) => {
-        List(mkLine(start, dest, if (width < 1) 1 else width, c))
+        mkMidPointReplacement(start, dest, displace, curDetail).map {
+          case (start, dest) => mkLine(start, dest, if (width < 1) 1 else width, c)
+        }
+        //        List(mkLine(start, dest, if (width < 1) 1 else width, c))
       }
       case SubTree(center, left, right) => traverse(center) ++ traverse(left) ++ traverse(right)
     }
