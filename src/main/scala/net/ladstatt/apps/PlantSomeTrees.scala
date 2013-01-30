@@ -57,7 +57,7 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
 
   val (minTreeSize, maxTreeSize) = (50, 150)
   def treeColor = mkRandColor
-  val (minDegree, maxDegree) = (0, Pi / 4)
+  val (minDegree, maxDegree) = (Pi / 4, Pi / 2)
   val growingSpeed = 96
   val branchSlices = 10
 
