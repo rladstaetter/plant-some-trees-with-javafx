@@ -2,14 +2,12 @@ package net.ladstatt.apps
 
 import java.io.File
 import java.io.PrintWriter
-
 import scala.collection.JavaConversions.asScalaBuffer
 import scala.collection.JavaConversions.seqAsJavaList
 import scala.math.Pi
 import scala.math.cos
 import scala.math.sin
 import scala.util.Random
-
 import javafx.animation.Animation
 import javafx.animation.KeyFrame
 import javafx.animation.Timeline
@@ -34,6 +32,7 @@ import javafx.scene.shape.Rectangle
 import javafx.scene.shape.Shape
 import javafx.stage.Stage
 import javafx.util.Duration
+import javafx.scene.effect.GaussianBlur
 
 /**
  * See video and some comments on http://ladstatt.blogspot.com/
@@ -46,16 +45,14 @@ object PlantSomeTrees {
 
 }
 
-class PlantSomeTrees extends javafx.application.Application {
+class PlantSomeTrees extends javafx.application.Application with LineUtils {
 
   val canvasWidth = 800
   val canvasHeight = 600
   val treeDepth = 5
-  val trunkWidth = 7
-  val (minTreeSize, maxTreeSize) = (50, 80)
-  //val treeColor = Color.CHOCOLATE
+  val trunkWidth = 5
+  val (minTreeSize, maxTreeSize) = (50, 150)
   def treeColor = mkRandColor
-  val initialDirection = (3 * Pi / 2)
   val (minDegree, maxDegree) = (0, Pi / 4)
   val growingSpeed = 96
   val branchSlices = 10
@@ -78,7 +75,7 @@ class PlantSomeTrees extends javafx.application.Application {
         """ <line x1="%s" y1="%s" x2="%s" y2="%s" style="stroke:%s;stroke-width:%s" />"""
           .format(line.getStartX.toInt, line.getStartY.toInt, line.getEndX().toInt, line.getEndY.toInt, rgb, line.getStrokeWidth.toInt)
       }
-      case _ => sys.error("unsupported")
+      case x => sys.error("unsupported: %s".format(x.getClass))
     }).toList.mkString(System.getProperty("line.separator"))
 
     """<!DOCTYPE html>
@@ -98,7 +95,7 @@ class PlantSomeTrees extends javafx.application.Application {
     tree.setOnDragDetected(mkEventHandler((event: MouseEvent) => {
       val db = tree.startDragAndDrop(TransferMode.ANY: _*)
       val content = new ClipboardContent()
-      val tmpFile =  File.createTempFile("Tree", ".html")
+      val tmpFile = File.createTempFile("Tree", ".html")
       write2File(tmpFile, mkSvg(tree))
       content.putHtml(mkSvg(tree))
       content.putFiles(Vector(tmpFile))
@@ -126,13 +123,14 @@ class PlantSomeTrees extends javafx.application.Application {
 
     drawingArea.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler[MouseEvent] {
       def handle(event: MouseEvent) {
-        val broot = Branch(event.getX, event.getY, minTreeSize + (maxTreeSize - minTreeSize) * Random.nextDouble,
-          initialDirection, treeColor, trunkWidth, treeDepth)
+        val start = Vec(event.getX, event.getY)
+        val dest = start + Vec(0, ((maxTreeSize - minTreeSize)))
+        val broot = Branch(dest, start, treeColor, trunkWidth, treeDepth)
         var lines2Paint = traverse(mkRandomTree(broot)).toList
         val tree = new Group()
 
         initDragNDrop(tree)
-        
+
         tree.addEventHandler(MouseEvent.MOUSE_ENTERED, new EventHandler[MouseEvent] {
           def handle(event: MouseEvent) {
             tree.setEffect(new Glow(1.0))
@@ -177,36 +175,33 @@ class PlantSomeTrees extends javafx.application.Application {
   }
 
   sealed trait ATree
-  case class Branch(x: Double, y: Double, length: Double, degree: Double, color: Color, width: Int, ord: Int) extends ATree
+  case class Branch(source: Vec, dest: Vec, color: Color, width: Int, ord: Int) extends ATree
   case class SubTree(center: ATree, left: ATree, right: ATree) extends ATree
 
   def mkRandomTree(root: Branch): ATree = {
 
     def mkRandTree(tree: ATree): ATree =
       tree match {
-        case Branch(x0, y0, length, d0, color, width, ord) => {
+        case Branch(start, dest, color, width, ord) => {
           ord match {
             case 0 => tree
             case _ => {
+              val dir = (start - dest).onedir
+              val length = (start - dest).length
+              //              val l0 = length * (1 - Random.nextDouble * 0.3)
+              //              val l1 = length * (1 - Random.nextDouble * 0.5)
+              //              val l2 = length * (1 - Random.nextDouble * 0.5)
 
-              val l0 = length * (1 - Random.nextDouble * 0.3)
-              val l1 = length * (1 - Random.nextDouble * 0.5)
-              val l2 = length * (1 - Random.nextDouble * 0.5)
-
-              //              val l0 = length * 0.7
-              //              val l1 = length * 0.5
-              //              val l2 = length * 0.5
+              val l1 = length * 0.7
+              val l2 = length * 0.7
 
               // startpoint of left and right branch
-              val (xm, ym) = (x0 + l0 * cos(d0), y0 + l0 * sin(d0))
-
-              val (d1, d2) = (d0 + mkRandDegree, d0 - mkRandDegree)
-              //              val (d1, d2) = (d0 + Pi / 4, d0 - Pi / 4)
+              val midRoot = start + dir * length
 
               mkRandTree(SubTree(
-                Branch(x0, y0, length, d0, color, width, ord - 1), // trunk
-                Branch(xm, ym, l1, d1, color.darker, width - 1, ord - 1), // leftbranch
-                Branch(xm, ym, l2, d2, color.darker, width - 1, ord - 1))) // rightbranch
+                Branch(start, start + (dir * length), color, width, ord - 1), // trunk
+                Branch(midRoot, midRoot + (dir.spin(Pi / 4) * l1), color.darker, width - 1, ord - 1), // leftbranch
+                Branch(midRoot, midRoot + (dir.spin(-Pi / 4) * l2), color.darker, width - 1, ord - 1))) // rightbranch
             }
           }
         }
@@ -219,21 +214,48 @@ class PlantSomeTrees extends javafx.application.Application {
 
   def traverse(tree: ATree): List[Shape] = {
     tree match {
-      case Branch(x, y, l, d, c, width, ord) => mkLine(x, y, l, d, c, if (width < 1) 1 else width)
+      case Branch(start, dest, c, width, ord) => {
+        List(mkLine(start, dest, if (width < 1) 1 else width, c))
+      }
       case SubTree(center, left, right) => traverse(center) ++ traverse(left) ++ traverse(right)
     }
   }
 
-  def mkLine(x: Double, y: Double, length: Double, degree: Double, paint: Paint, width: Int): List[Shape] = {
-    val (dc0, ds0) = (length / branchSlices * cos(degree), length / branchSlices * sin(degree))
-    (for (i <- 1 to branchSlices) yield {
-      val (x2, y2) = (x + i * dc0, y + i * ds0)
-      val l = new Line(x + (i - 1) * dc0, y + (i - 1) * ds0, x2, y2)
-      l.setStrokeWidth(width)
-      l.setStroke(paint)
-      l
-    }).toList
+}
+
+trait LineUtils {
+
+  def mkMidPointReplacement(source: Vec,
+    dest: Vec, displace: Double, curDetail: Double): List[(Vec, Vec)] = {
+    if (displace < curDetail) {
+      List((source, dest))
+    } else {
+      val displacedCenter = source.center(dest).displace(displace)
+      mkMidPointReplacement(source, displacedCenter, displace / 2, curDetail) ++
+        mkMidPointReplacement(displacedCenter, dest, displace / 2, curDetail)
+    }
+  }
+
+  case class Vec(x: Double, y: Double) {
+    def -(that: Vec) = Vec(that.x - x, that.y - y)
+    def +(that: Vec) = Vec(x + that.x, y + that.y)
+    def *(factor: Double) = Vec(factor * x, factor * y)
+    def /(l: Double) = if (l != 0) Vec(x / l, y / l) else sys.error("div.0")
+    def length = scala.math.sqrt(x * x + y * y)
+    def displace(f: Double) =
+      Vec(x + (Random.nextDouble - 0.5) * f, y + (Random.nextDouble - 0.5) * f)
+    def onedir = this / length
+    def normal = Vec(-y, x)
+    def center(other: Vec) = Vec((other.x + x) / 2, (other.y + y) / 2)
+    def spin(phi: Double) =
+      Vec((x * cos(phi)) - (y * sin(phi)), (x * sin(phi)) + (y * cos(phi)))
+  }
+
+  def mkLine(source: Vec, dest: Vec, width: Double, color: Color): Line = {
+    val line = new Line(source.x, source.y, dest.x, dest.y)
+    line.setStroke(color)
+    line.setStrokeWidth(width)
+    line
   }
 
 }
-
