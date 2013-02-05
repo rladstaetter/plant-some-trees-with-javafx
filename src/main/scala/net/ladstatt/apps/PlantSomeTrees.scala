@@ -33,6 +33,7 @@ import javafx.scene.shape.Shape
 import javafx.stage.Stage
 import javafx.util.Duration
 import javafx.scene.effect.GaussianBlur
+import javafx.scene.shape.Circle
 
 /**
  * See video and some comments on http://ladstatt.blogspot.com/
@@ -213,13 +214,40 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
     mkRandTree(root)
   }
 
+  def mkCircle(p: Vec, radius: Double, color : Color): Circle = {
+    val c = new Circle()
+    c.setCenterX(p.x)
+    c.setCenterY(p.y)
+    c.setRadius(radius)
+    c.setFill(color)
+    c
+  }
+
+  def mkLeaves(start: Vec, dest: Vec, c: Color): List[Shape] = {
+    val n = (dest - start).normal
+    val p1 = dest + n
+    val p2 = dest + (n * -1)
+    List(mkCircle(p1, n.length, c.brighter), mkCircle(p2, n.length, c.brighter))
+  }
+
   def traverse(tree: ATree): List[Shape] = {
     tree match {
       case Branch(start, dest, c, width, ord) => {
-        mkMidPointReplacement(start, dest, displace, curDetail).map {
-          case (start, dest) => mkLine(start, dest, if (width < 1) 1 else width, c)
+        val points = mkMidPointReplacement(start, dest, displace, curDetail)
+        width match {
+          case 1 => {
+            points.map {
+              case (start, dest) => mkLine(start, dest, width, c)
+            } ++
+              (points.map { // leaves
+                case (start, dest) => mkLeaves(start, dest, c)
+              }).flatten
+
+          }
+          case _ => points.map {
+            case (start, dest) => mkLine(start, dest, width, c)
+          }
         }
-        //        List(mkLine(start, dest, if (width < 1) 1 else width, c))
       }
       case SubTree(center, left, right) => traverse(center) ++ traverse(left) ++ traverse(right)
     }
