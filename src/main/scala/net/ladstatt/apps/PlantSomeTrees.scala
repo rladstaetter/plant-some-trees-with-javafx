@@ -80,7 +80,8 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
         """ <line x1="%s" y1="%s" x2="%s" y2="%s" style="stroke:%s;stroke-width:%s" />"""
           .format(line.getStartX.toInt, line.getStartY.toInt, line.getEndX().toInt, line.getEndY.toInt, rgb, line.getStrokeWidth.toInt)
       }
-      case x => sys.error("unsupported: %s".format(x.getClass))
+      //      case x => sys.error("unsupported: %s".format(x.getClass))
+      case _ => // TODO add circles
     }).toList.mkString(System.getProperty("line.separator"))
 
     """<!DOCTYPE html>
@@ -214,7 +215,7 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
     mkRandTree(root)
   }
 
-  def mkCircle(p: Vec, radius: Double, color : Color): Circle = {
+  def mkCircle(p: Vec, radius: Double, color: Color): Circle = {
     val c = new Circle()
     c.setCenterX(p.x)
     c.setCenterY(p.y)
