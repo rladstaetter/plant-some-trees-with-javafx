@@ -34,6 +34,59 @@ import javafx.stage.Stage
 import javafx.util.Duration
 import javafx.scene.effect.GaussianBlur
 import javafx.scene.shape.Circle
+import javafx.scene.PointLight
+import javafx.scene.PerspectiveCamera
+import javafx.scene.Node
+import javafx.scene.layout.Region
+import javafx.scene.shape.Cylinder
+import javafx.geometry.Point3D
+import javafx.scene.paint.Material
+import javafx.scene.shape.Shape3D
+import javafx.scene.shape.Sphere
+import javafx.scene.paint.PhongMaterial
+import javafx.scene.AmbientLight
+import scala.util.Random.nextBoolean
+import scala.util.Random.nextDouble
+
+/**
+ * starting with scala stuff, defintion of implicits such that i can continue to use
+ * a nicer syntax for calculating the 3d geometry
+ */
+object Types {
+  def ??? : Nothing = throw new Error("an implementation is missing")
+
+  type ??? = Nothing
+  type *** = Any
+
+  implicit def toSPoint3D(point3D: Point3D): SPoint3D = {
+    SPoint3D(point3D.getX, point3D.getY, point3D.getZ)
+  }
+  implicit def toPoint3D(spoint3D: SPoint3D): Point3D = spoint3D.toPoint3D
+}
+
+case class SPoint3D(x: Double, y: Double, z: Double) {
+
+  def -(that: SPoint3D) = SPoint3D(that.x - x, that.y - y, that.z - z)
+  def +(that: SPoint3D) = SPoint3D(x + that.x, y + that.y, that.z + z)
+  def *(factor: Double) = SPoint3D(factor * x, factor * y, factor * z)
+  def /(l: Double) = if (l != 0) SPoint3D(x / l, y / l, z / l) else sys.error("div.0")
+  def length = scala.math.sqrt(x * x + y * y + z * z)
+  def displace(f: Double) =
+    SPoint3D(x + (Random.nextDouble - 0.5) * f, y + (Random.nextDouble - 0.5) * f, +z + (Random.nextDouble - 0.5) * f)
+
+  def onedir = this / length
+  def normal: SPoint3D = SPoint3D(-y, x, z)
+  def midpoint(other: SPoint3D) = SPoint3D((other.x + x) / 2, (other.y + y) / 2, (other.z + z) / 2)
+  def spin(phi: Double): SPoint3D =
+    SPoint3D((x * cos(phi)) - (y * sin(phi)), (x * sin(phi)) + (y * cos(phi)), z
+      + (if (nextBoolean) nextDouble else (-nextDouble)))
+
+  def degrees: (Double, Double) = (if (x != 0) scala.math.atan(y / x) * 180 / scala.math.Pi else 90,
+    if (x != 0) scala.math.atan(z / x) * 180 / scala.math.Pi else 90)
+
+  def toPoint3D = new Point3D(x, y, z)
+  override def toString: String = s"[$x/$y/$z]"
+}
 
 /**
  * See video and some comments on http://ladstatt.blogspot.com/
@@ -46,131 +99,123 @@ object PlantSomeTrees {
 
 }
 
-class PlantSomeTrees extends javafx.application.Application with LineUtils {
+trait JfxUtils {
+  def mkEventHandler[E <: Event](f: E => Unit) = new EventHandler[E] { def handle(e: E) = f(e) }
+}
 
+trait Spinner extends JfxUtils {
+
+  var anchorX: Double = _
+  var anchorY: Double = _
+  var anchorAngle: Double = _
+
+  def initSpinner(scene: Scene, drawingArea: Node): Unit = {
+    scene.setOnMousePressed(mkEventHandler((event: MouseEvent) => {
+      anchorX = event.getSceneX()
+      anchorAngle = drawingArea.getRotate()
+    }))
+
+    scene.setOnMouseDragged(mkEventHandler((event: MouseEvent) => {
+      drawingArea.setRotate(anchorAngle + anchorX - event.getSceneX())
+    }))
+  }
+
+}
+
+class PlantSomeTrees extends javafx.application.Application with ShapeUtils with Spinner {
+
+  import Types._
   val canvasWidth = 800
   val canvasHeight = 600
-  val treeDepth = 5
-  val trunkWidth = 5
-
+  val treeDepth = 4
+  val trunkWidth = 20
+  val trunkColor = Color.BURLYWOOD
   val curDetail = 2
-  val displace = 10
+  val displace = 40
+  val treeSize = 400
 
-  val (minTreeSize, maxTreeSize) = (50, 150)
-  def treeColor = mkRandColor
+  val spectatorLight = {
+    val l = new PointLight(Color.WHITE)
+    l.setTranslateZ(-500)
+    l
+  }
+
+  val l2 = {
+    val l = new PointLight(Color.WHITE)
+    l.setTranslateX(canvasWidth / 2)
+    l.setTranslateY(canvasHeight / 2)
+    l.setTranslateZ(500)
+    l
+  }
+
+  val colors = {
+    var initColor = trunkColor
+    for (i <- 0 to treeDepth) yield {
+      initColor = initColor.brighter().brighter.brighter
+      initColor
+    }
+  }
+
+  def mkMaterial(color: Color) = {
+    val m = new PhongMaterial()
+    m.setDiffuseColor(color)
+    m
+  }
+
+  def treeMaterials = for (c <- colors) yield mkMaterial(c)
+
+  def leafMaterial = {
+    val m = new PhongMaterial()
+    m.setDiffuseColor(Color.GREEN)
+    m
+  }
+
   val (minDegree, maxDegree) = (Pi / 4, Pi / 2)
   val growingSpeed = 96
   val branchSlices = 10
 
-  def mkEventHandler[E <: Event](f: E => Unit) = new EventHandler[E] { def handle(e: E) = f(e) }
+  def growTree(drawingArea: Group, start: SPoint3D) = {
+    val dest = start + SPoint3D(0, treeSize, 0)
+    val broot = Branch(dest, start, treeMaterials(treeDepth), trunkWidth, treeDepth)
+    var cylinders2Paint = traverse(mkRandomTree(broot)).toList
 
-  def write2File(file: File, s: String) = {
-    val out = new PrintWriter(file, "UTF-8")
-    try { out.print(s) } finally { out.close }
-  }
+    val tree = new Group()
 
-  def mkSvg(source: Group): String = {
-    val treeAsSvg = (for (s <- source.getChildren()) yield s match {
-      case line: Line => {
-        val rgb = line.getStroke match {
-          case c: Color => "rgb(%s,%s,%s)".format((c.getRed() * 255).toInt, (c.getGreen * 255).toInt, (c.getBlue * 255).toInt)
-          case _ => sys.error("unsupported")
+    drawingArea.getChildren.add(tree)
+    val growTimeline = new Timeline
+    growTimeline.setRate(growingSpeed)
+    growTimeline.setCycleCount(Animation.INDEFINITE)
+    growTimeline.getKeyFrames().add(
+      new KeyFrame(Duration.seconds(1), mkEventHandler((event: ActionEvent) => {
+        if (!cylinders2Paint.isEmpty) {
+          val (hd :: tail) = cylinders2Paint
+          tree.getChildren.add(hd)
+          cylinders2Paint = tail
+        } else {
+          growTimeline.stop
         }
-
-        """ <line x1="%s" y1="%s" x2="%s" y2="%s" style="stroke:%s;stroke-width:%s" />"""
-          .format(line.getStartX.toInt, line.getStartY.toInt, line.getEndX().toInt, line.getEndY.toInt, rgb, line.getStrokeWidth.toInt)
-      }
-      //      case x => sys.error("unsupported: %s".format(x.getClass))
-      case _ => // TODO add circles
-    }).toList.mkString(System.getProperty("line.separator"))
-
-    """<!DOCTYPE html>
-<html>
-<body>
-
-<svg xmlns="http://www.w3.org/2000/svg" version="1.1">
-%s
-</svg>
-
-</body>
-</html>
-""".format(treeAsSvg)
-  }
-
-  def initDragNDrop(tree: Group) = {
-    tree.setOnDragDetected(mkEventHandler((event: MouseEvent) => {
-      val db = tree.startDragAndDrop(TransferMode.ANY: _*)
-      val content = new ClipboardContent()
-      val tmpFile = File.createTempFile("Tree", ".html")
-      write2File(tmpFile, mkSvg(tree))
-      content.putHtml(mkSvg(tree))
-      content.putFiles(Vector(tmpFile))
-      db.setContent(content)
-      event.consume()
-    }))
-
-    tree.setOnDragDone(mkEventHandler((event: DragEvent) => {
-      event.consume()
-    }))
+      })))
+    growTimeline.play()
   }
 
   override def start(stage: Stage): Unit = {
-    stage.setTitle("A forest with midpoint replacement")
+    stage.setTitle("A 3D forest")
 
-    val drawingArea = new Group()
-    val background = {
-      val b = new Rectangle(0, 0, canvasWidth, canvasHeight)
-      val stops = List(new Stop(0, Color.BLACK), new Stop(1, Color.WHITESMOKE))
-      val g = new LinearGradient(0.0, 1.0, 0.0, 0.0, true, CycleMethod.NO_CYCLE, stops)
-      b.setFill(g)
-      b
-    }
-    drawingArea.getChildren.add(background)
+    val backgroundFill = new LinearGradient(0.0, 1.0, 0.0, 0.0, true, CycleMethod.NO_CYCLE, List(new Stop(0, Color.BLACK), new Stop(1, Color.WHITESMOKE)))
 
-    drawingArea.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler[MouseEvent] {
-      def handle(event: MouseEvent) {
-        val start = Vec(event.getX, event.getY)
-        val dest = start + Vec(0, ((maxTreeSize - minTreeSize)))
-        val broot = Branch(dest, start, treeColor, trunkWidth, treeDepth)
-        var lines2Paint = traverse(mkRandomTree(broot)).toList
-        val tree = new Group()
+    val drawingArea = new Group(spectatorLight, l2)
+    drawingArea.setTranslateZ(1500)
+    drawingArea.setRotationAxis(SPoint3D(0, 1, 0))
 
-        initDragNDrop(tree)
+    val scene = new Scene(drawingArea, canvasWidth, canvasHeight)
 
-        tree.addEventHandler(MouseEvent.MOUSE_ENTERED, new EventHandler[MouseEvent] {
-          def handle(event: MouseEvent) {
-            tree.setEffect(new Glow(1.0))
-          }
-        })
-        tree.addEventHandler(MouseEvent.MOUSE_EXITED, new EventHandler[MouseEvent] {
-          def handle(event: MouseEvent) {
-            tree.setEffect(new Glow(0))
-          }
-        })
-
-        drawingArea.getChildren.add(tree)
-        val growTimeline = new Timeline
-        growTimeline.setRate(growingSpeed)
-        growTimeline.setCycleCount(Animation.INDEFINITE)
-        growTimeline.getKeyFrames().add(
-          new KeyFrame(Duration.seconds(1),
-            new EventHandler[ActionEvent]() {
-              def handle(event: ActionEvent) {
-                if (!lines2Paint.isEmpty) {
-                  val (hd :: tail) = lines2Paint
-                  tree.getChildren.add(hd)
-                  lines2Paint = tail
-                } else {
-                  growTimeline.stop
-                }
-              }
-            }))
-        growTimeline.play()
-
-      }
-    })
-
-    stage.setScene(new Scene(drawingArea, canvasWidth, canvasHeight))
+    val start = SPoint3D(canvasWidth / 2, canvasHeight * 3 / 4, 0)
+    growTree(drawingArea, start)
+    scene.setFill(backgroundFill)
+    stage.setScene(scene)
+    val perspectiveCamera = new PerspectiveCamera(false)
+    scene.setCamera(perspectiveCamera)
+    initSpinner(scene, drawingArea)
     stage.show()
   }
 
@@ -181,14 +226,14 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
   }
 
   sealed trait ATree
-  case class Branch(source: Vec, dest: Vec, color: Color, width: Int, ord: Int) extends ATree
+  case class Branch(source: SPoint3D, dest: SPoint3D, material: Material, width: Int, ord: Int) extends ATree
   case class SubTree(center: ATree, left: ATree, right: ATree) extends ATree
 
   def mkRandomTree(root: Branch): ATree = {
 
     def mkRandTree(tree: ATree): ATree =
       tree match {
-        case Branch(start, dest, color, width, ord) => {
+        case Branch(start, dest, material, width, ord) => {
           ord match {
             case 0 => tree
             case _ => {
@@ -202,9 +247,9 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
               val midRoot = start + dir * length
 
               mkRandTree(SubTree(
-                Branch(start, start + (dir * length), color, width, ord - 1), // trunk
-                Branch(midRoot, midRoot + (dir.spin(mkRandDegree) * l1), color.darker, width - 1, ord - 1), // leftbranch
-                Branch(midRoot, midRoot + (dir.spin(-mkRandDegree) * l2), color.darker, width - 1, ord - 1))) // rightbranch
+                Branch(start, start + (dir * length), treeMaterials(ord), width, ord - 1), // trunk
+                Branch(midRoot, midRoot + (dir.spin(mkRandDegree) * l1), treeMaterials(ord - 1), if (width > 1) width / 2 else 1, ord - 1), // leftbranch
+                Branch(midRoot, midRoot + (dir.spin(-mkRandDegree) * l2), treeMaterials(ord - 1), if (width > 1) width / 2 else 1, ord - 1))) // rightbranch
             }
           }
         }
@@ -215,38 +260,35 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
     mkRandTree(root)
   }
 
-  def mkCircle(p: Vec, radius: Double, color: Color): Circle = {
-    val c = new Circle()
-    c.setCenterX(p.x)
-    c.setCenterY(p.y)
-    c.setRadius(radius)
-    c.setFill(color)
-    c
-  }
-
-  def mkLeaves(start: Vec, dest: Vec, c: Color): List[Shape] = {
+  def mkLeaves(start: SPoint3D, dest: SPoint3D, material: Material): List[Shape3D] = {
     val n = (dest - start).normal
     val p1 = dest + n
     val p2 = dest + (n * -1)
-    List(mkCircle(p1, n.length, c.brighter), mkCircle(p2, n.length, c.brighter))
+    List(mkSphere(p1, n.length * scala.util.Random.nextDouble, material), mkSphere(p2, n.length * scala.util.Random.nextDouble, material))
   }
 
-  def traverse(tree: ATree): List[Shape] = {
+  def traverse(tree: ATree): List[Shape3D] = {
     tree match {
-      case Branch(start, dest, c, width, ord) => {
+      case Branch(start, dest, m, width, ord) => {
         val points = mkMidPointReplacement(start, dest, displace, curDetail)
         width match {
           case 1 => {
             points.map {
-              case (start, dest) => mkLine(start, dest, width, c)
-            } ++
-              (points.map { // leaves
-                case (start, dest) => mkLeaves(start, dest, c)
-              }).flatten
+              case (start, dest) => {
+                mkCylinder(start, dest, if (width > 0) width else 1, m)
+              }
+            } 
+//            ++ // leaves
+//              (points.map { 
+//                case (start, dest) => mkLeaves(start, dest, leafMaterial)
+//              }).flatten
 
           }
           case _ => points.map {
-            case (start, dest) => mkLine(start, dest, width, c)
+            case (start, dest) => {
+//              println(start + " -> " + dest)
+              mkCylinder(start, dest, width, m)
+            }
           }
         }
       }
@@ -256,39 +298,41 @@ class PlantSomeTrees extends javafx.application.Application with LineUtils {
 
 }
 
-trait LineUtils {
-
-  def mkMidPointReplacement(source: Vec,
-    dest: Vec, displace: Double, curDetail: Double): List[(Vec, Vec)] = {
+trait ShapeUtils {
+  import Types._
+  def mkMidPointReplacement(source: SPoint3D,
+    dest: SPoint3D, displace: Double, curDetail: Double): List[(SPoint3D, SPoint3D)] = {
     if (displace < curDetail) {
       List((source, dest))
     } else {
-      val displacedCenter = source.center(dest).displace(displace)
+      val displacedCenter = source.midpoint(dest).displace(displace)
       mkMidPointReplacement(source, displacedCenter, displace / 2, curDetail) ++
         mkMidPointReplacement(displacedCenter, dest, displace / 2, curDetail)
     }
   }
 
-  case class Vec(x: Double, y: Double) {
-    def -(that: Vec) = Vec(that.x - x, that.y - y)
-    def +(that: Vec) = Vec(x + that.x, y + that.y)
-    def *(factor: Double) = Vec(factor * x, factor * y)
-    def /(l: Double) = if (l != 0) Vec(x / l, y / l) else sys.error("div.0")
-    def length = scala.math.sqrt(x * x + y * y)
-    def displace(f: Double) =
-      Vec(x + (Random.nextDouble - 0.5) * f, y + (Random.nextDouble - 0.5) * f)
-    def onedir = this / length
-    def normal = Vec(-y, x)
-    def center(other: Vec) = Vec((other.x + x) / 2, (other.y + y) / 2)
-    def spin(phi: Double) =
-      Vec((x * cos(phi)) - (y * sin(phi)), (x * sin(phi)) + (y * cos(phi)))
+  def mkCylinder(source: SPoint3D, dest: SPoint3D, radius: Double, material: Material): Cylinder = {
+    val rotation = (dest - source)
+    val height = (dest - source).length
+    val c = new Cylinder(radius, height)
+    c.setTranslateX(source.x)
+    c.setTranslateY(source.y)
+    c.setTranslateZ(source.z)
+    c.setRotationAxis(rotation)
+    c.setRotate(rotation.degrees._1)
+    c.setMaterial(material)
+    c
   }
 
-  def mkLine(source: Vec, dest: Vec, width: Double, color: Color): Line = {
-    val line = new Line(source.x, source.y, dest.x, dest.y)
-    line.setStroke(color)
-    line.setStrokeWidth(width)
-    line
+  def mkSphere(p: SPoint3D, radius: Double, material: Material): Sphere = {
+
+    val c = new Sphere()
+    c.setTranslateX(p.x)
+    c.setTranslateY(p.y)
+    c.setTranslateZ(p.z)
+    c.setRadius(radius)
+    c.setMaterial(material)
+    c
   }
 
 }
