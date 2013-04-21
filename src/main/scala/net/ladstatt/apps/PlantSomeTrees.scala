@@ -1,13 +1,13 @@
 package net.ladstatt.apps
 
-import java.io.File
-import java.io.PrintWriter
-import scala.collection.JavaConversions.asScalaBuffer
 import scala.collection.JavaConversions.seqAsJavaList
 import scala.math.Pi
 import scala.math.cos
 import scala.math.sin
 import scala.util.Random
+import scala.util.Random.nextBoolean
+import scala.util.Random.nextDouble
+
 import javafx.animation.Animation
 import javafx.animation.KeyFrame
 import javafx.animation.Timeline
@@ -15,48 +15,30 @@ import javafx.application.Application
 import javafx.event.ActionEvent
 import javafx.event.Event
 import javafx.event.EventHandler
+import javafx.geometry.Point3D
 import javafx.scene.Group
+import javafx.scene.Node
+import javafx.scene.PerspectiveCamera
+import javafx.scene.PointLight
 import javafx.scene.Scene
-import javafx.scene.effect.Glow
-import javafx.scene.input.ClipboardContent
-import javafx.scene.input.DragEvent
 import javafx.scene.input.MouseEvent
-import javafx.scene.input.TransferMode
 import javafx.scene.paint.Color
 import javafx.scene.paint.CycleMethod
 import javafx.scene.paint.LinearGradient
-import javafx.scene.paint.Paint
-import javafx.scene.paint.Stop
-import javafx.scene.shape.Line
-import javafx.scene.shape.Rectangle
-import javafx.scene.shape.Shape
-import javafx.stage.Stage
-import javafx.util.Duration
-import javafx.scene.effect.GaussianBlur
-import javafx.scene.shape.Circle
-import javafx.scene.PointLight
-import javafx.scene.PerspectiveCamera
-import javafx.scene.Node
-import javafx.scene.layout.Region
-import javafx.scene.shape.Cylinder
-import javafx.geometry.Point3D
 import javafx.scene.paint.Material
+import javafx.scene.paint.PhongMaterial
+import javafx.scene.paint.Stop
+import javafx.scene.shape.Cylinder
 import javafx.scene.shape.Shape3D
 import javafx.scene.shape.Sphere
-import javafx.scene.paint.PhongMaterial
-import javafx.scene.AmbientLight
-import scala.util.Random.nextBoolean
-import scala.util.Random.nextDouble
+import javafx.stage.Stage
+import javafx.util.Duration
 
 /**
  * starting with scala stuff, defintion of implicits such that i can continue to use
  * a nicer syntax for calculating the 3d geometry
  */
 object Types {
-  def ??? : Nothing = throw new Error("an implementation is missing")
-
-  type ??? = Nothing
-  type *** = Any
 
   implicit def toSPoint3D(point3D: Point3D): SPoint3D = {
     SPoint3D(point3D.getX, point3D.getY, point3D.getZ)
@@ -88,13 +70,41 @@ case class SPoint3D(x: Double, y: Double, z: Double) {
   override def toString: String = s"[$x/$y/$z]"
 }
 
-/**
- * See video and some comments on http://ladstatt.blogspot.com/
- */
-object PlantSomeTrees {
+trait ShapeUtils {
+  import Types._
+  def mkMidPointReplacement(source: SPoint3D,
+    dest: SPoint3D, displace: Double, curDetail: Double): List[(SPoint3D, SPoint3D)] = {
+    if (displace < curDetail) {
+      List((source, dest))
+    } else {
+      val displacedCenter = source.midpoint(dest).displace(displace)
+      mkMidPointReplacement(source, displacedCenter, displace / 2, curDetail) ++
+        mkMidPointReplacement(displacedCenter, dest, displace / 2, curDetail)
+    }
+  }
 
-  def main(args: Array[String]): Unit = {
-    Application.launch(classOf[PlantSomeTrees], args: _*)
+  def mkCylinder(source: SPoint3D, dest: SPoint3D, radius: Double, material: Material): Cylinder = {
+    val rotation = (dest - source)
+    val height = (dest - source).length
+    val c = new Cylinder(radius, height)
+    c.setTranslateX(source.x)
+    c.setTranslateY(source.y)
+    c.setTranslateZ(source.z)
+    c.setRotationAxis(rotation)
+    c.setRotate(rotation.degrees._1)
+    c.setMaterial(material)
+    c
+  }
+
+  def mkSphere(p: SPoint3D, radius: Double, material: Material): Sphere = {
+
+    val c = new Sphere()
+    c.setTranslateX(p.x)
+    c.setTranslateY(p.y)
+    c.setTranslateZ(p.z)
+    c.setRadius(radius)
+    c.setMaterial(material)
+    c
   }
 
 }
@@ -110,14 +120,25 @@ trait Spinner extends JfxUtils {
   var anchorAngle: Double = _
 
   def initSpinner(scene: Scene, drawingArea: Node): Unit = {
-    scene.setOnMousePressed(mkEventHandler((event: MouseEvent) => {
+    scene.setOnMousePressed(mkEventHandler(event => {
       anchorX = event.getSceneX()
       anchorAngle = drawingArea.getRotate()
     }))
 
-    scene.setOnMouseDragged(mkEventHandler((event: MouseEvent) => {
+    scene.setOnMouseDragged(mkEventHandler(event => {
       drawingArea.setRotate(anchorAngle + anchorX - event.getSceneX())
     }))
+  }
+
+}
+
+/**
+ * See video and some comments on http://ladstatt.blogspot.com/
+ */
+object PlantSomeTrees {
+
+  def main(args: Array[String]): Unit = {
+    Application.launch(classOf[PlantSomeTrees], args: _*)
   }
 
 }
@@ -127,12 +148,14 @@ class PlantSomeTrees extends javafx.application.Application with ShapeUtils with
   import Types._
   val canvasWidth = 800
   val canvasHeight = 600
-  val treeDepth = 4
-  val trunkWidth = 20
+  val treeDepth = 5
+  val trunkWidth = 30
   val trunkColor = Color.BURLYWOOD
   val curDetail = 2
   val displace = 40
   val treeSize = 400
+  val (minDegree, maxDegree) = (Pi / 4, Pi * 3 / 8)
+  val growingSpeed = 196
 
   val spectatorLight = {
     val l = new PointLight(Color.WHITE)
@@ -170,10 +193,6 @@ class PlantSomeTrees extends javafx.application.Application with ShapeUtils with
     m
   }
 
-  val (minDegree, maxDegree) = (Pi / 4, Pi / 2)
-  val growingSpeed = 96
-  val branchSlices = 10
-
   def growTree(drawingArea: Group, start: SPoint3D) = {
     val dest = start + SPoint3D(0, treeSize, 0)
     val broot = Branch(dest, start, treeMaterials(treeDepth), trunkWidth, treeDepth)
@@ -201,8 +220,8 @@ class PlantSomeTrees extends javafx.application.Application with ShapeUtils with
   override def start(stage: Stage): Unit = {
     stage.setTitle("A 3D forest")
 
-    val backgroundFill = new LinearGradient(0.0, 1.0, 0.0, 0.0, true, CycleMethod.NO_CYCLE, List(new Stop(0, Color.BLACK), new Stop(1, Color.WHITESMOKE)))
-
+    //    val backgroundFill = new LinearGradient(0.0, 1.0, 0.0, 0.0, true, CycleMethod.NO_CYCLE, List(new Stop(0, Color.BLACK), new Stop(1, Color.WHITESMOKE)))
+    val backgroundFill = Color.WHITE
     val drawingArea = new Group(spectatorLight, l2)
     drawingArea.setTranslateZ(1500)
     drawingArea.setRotationAxis(SPoint3D(0, 1, 0))
@@ -277,16 +296,16 @@ class PlantSomeTrees extends javafx.application.Application with ShapeUtils with
               case (start, dest) => {
                 mkCylinder(start, dest, if (width > 0) width else 1, m)
               }
-            } 
-//            ++ // leaves
-//              (points.map { 
-//                case (start, dest) => mkLeaves(start, dest, leafMaterial)
-//              }).flatten
+            }
+            //            ++ // leaves, triggers exception after a while
+            //              (points.map {
+            //                case (start, dest) => mkLeaves(start, dest, leafMaterial)
+            //              }).flatten
 
           }
           case _ => points.map {
             case (start, dest) => {
-//              println(start + " -> " + dest)
+              //              println(start + " -> " + dest)
               mkCylinder(start, dest, width, m)
             }
           }
@@ -298,41 +317,3 @@ class PlantSomeTrees extends javafx.application.Application with ShapeUtils with
 
 }
 
-trait ShapeUtils {
-  import Types._
-  def mkMidPointReplacement(source: SPoint3D,
-    dest: SPoint3D, displace: Double, curDetail: Double): List[(SPoint3D, SPoint3D)] = {
-    if (displace < curDetail) {
-      List((source, dest))
-    } else {
-      val displacedCenter = source.midpoint(dest).displace(displace)
-      mkMidPointReplacement(source, displacedCenter, displace / 2, curDetail) ++
-        mkMidPointReplacement(displacedCenter, dest, displace / 2, curDetail)
-    }
-  }
-
-  def mkCylinder(source: SPoint3D, dest: SPoint3D, radius: Double, material: Material): Cylinder = {
-    val rotation = (dest - source)
-    val height = (dest - source).length
-    val c = new Cylinder(radius, height)
-    c.setTranslateX(source.x)
-    c.setTranslateY(source.y)
-    c.setTranslateZ(source.z)
-    c.setRotationAxis(rotation)
-    c.setRotate(rotation.degrees._1)
-    c.setMaterial(material)
-    c
-  }
-
-  def mkSphere(p: SPoint3D, radius: Double, material: Material): Sphere = {
-
-    val c = new Sphere()
-    c.setTranslateX(p.x)
-    c.setTranslateY(p.y)
-    c.setTranslateZ(p.z)
-    c.setRadius(radius)
-    c.setMaterial(material)
-    c
-  }
-
-}
